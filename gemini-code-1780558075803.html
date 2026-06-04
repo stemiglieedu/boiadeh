@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Openfront.io - Tactical Edition</title>
+    <style>
+        :root {
+            --bg-dark: #0b0f19;
+            --panel-bg: rgba(22, 30, 49, 0.9);
+            --border-color: #1e293b;
+            --text-main: #f8fafc;
+            --text-muted: #64748b;
+            --accent: #3b82f6;
+        }
+        body {
+            background: var(--bg-dark);
+            color: var(--text-main);
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+        /* Layout Principale */
+        #game-container {
+            flex: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+            background: radial-gradient(circle at center, #1e293b 0%, #0f172a 100%);
+        }
+        canvas {
+            border: 2px solid var(--border-color);
+            border-radius: 12px;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.6);
+            cursor: crosshair;
+        }
+        /* Overlay Messaggi dello Stato di Gioco */
+        #screen-overlay {
+            position: absolute;
+            background: rgba(15, 23, 42, 0.85);
+            backdrop-filter: blur(8px);
+            padding: 30px;
+            border-radius: 16px;
+            border: 1px solid var(--border-color);
+            text-align: center;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            max-width: 400px;
+        }
+        #screen-overlay h1 { margin-top: 0; font-size: 1.8rem; }
+        #screen-overlay p { color: var(--text-muted); margin-bottom: 24px; }
+
+        /* Pannello di Controllo Laterale */
+        #side-panel {
+            width: 360px;
+            background: var(--panel-bg);
+            border-left: 1px solid var(--border-color);
+            backdrop-filter: blur(12px);
+            display: flex;
+            flex-direction: column;
+            padding: 24px;
+            box-sizing: border-box;
+        }
+        h2 { font-size: 1.1rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin: 0 0 16px 0; }
+        
+        /* Classifica */
+        #leaderboard { list-style: none; padding: 0; margin: 0; flex: 1; overflow-y: auto; }
+        .leaderboard-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 14px;
+            background: rgba(255,255,255,0.03);
+            border-radius: 8px;
+            margin-bottom: 8px;
+            border-left: 5px solid transparent;
+            font-size: 0.95rem;
+        }
+        
+        /* Configurazione Attacco */
+        .attack-section { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border-color); }
+        .btn-group { display: flex; gap: 8px; margin-top: 12px; }
+        .btn-group button {
+            flex: 1;
+            background: #1e293b;
+            border: 1px solid #334155;
+            color: var(--text-main);
+            padding: 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+        .btn-group button:hover { background: #334155; }
+        .btn-group button.active { background: var(--accent); border-color: #60a5fa; box-shadow: 0 0 12px rgba(59, 130, 246, 0.4); }
+
+        /* Legenda Terreni */
+        .legend { display: flex; gap: 8px; font-size: 0.75rem; margin-top: 15px; justify-content: space-between;}
+        .legend-item { display: flex; align-items: center; gap: 4px; }
+        .legend-color { width: 12px; height: 12px; border-radius: 3px; }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="gameCanvas" width="600" height="600"></canvas>
+    
+    <div id="screen-overlay">
+        <h1 id="overlay-title">Scegli lo Spawn</h1>
+        <p id="overlay-desc">Clicca in un punto qualsiasi della terraferma sulla mappa per fondare la tua capitale e iniziare la conquista.</p>
+        <button id="overlay-btn" style="display:none; width:100%; padding:12px; background:var(--accent); color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer;" onclick="location.reload()">Rigioca</button>
+    </div>
+</div>
+
+<div id="side-panel">
+    <h2>Classifica Nazioni</h2>
+    <div id="leaderboard"></div>
+
+    <div class="attack-section">
+        <h2>Truppe da Inviare</h2>
+        <div class="btn-group">
+            <button id="btn-25" onclick="setAttackPercent(0.25)">25%</button>
+            <button id="btn-50" class="active" onclick="setAttackPercent(0.50)">50%</button>
+            <button id="btn-75" onclick="setAttackPercent(0.75)">75%</button>
+        </div>
+        
+        <div style="margin-top: 20px;">
+            <h2>Legenda Altitudine</h2>
+            <div class="legend">
+                <div class="legend-item"><div class="legend-color" style="background:#15803d"></div>Pianura (Facile)</div>
+                <div class="legend-item"><div class="legend-color" style="background:#a16207"></div>Collina (Medio)</div>
+                <div class="legend-item"><div class="legend-color" style="background:#78716c"></div>Montagna (Difficile)</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// ================= CONFIGURAZIONE STRUTTURA =================
+const CANVAS_SIZE = 600;
+const GRID_SIZE = 150; // Mappa 150x150 = 22500 celle (Mappa vasta)
+const CELL_SIZE = CANVAS_SIZE / GRID_SIZE;
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d', { alpha: false });
+
+let gameState = 'SPAWN'; // SPAWN, PLAYING, GAMEOVER
+let grid = [];
+let NATIONS = [];
+let attackPercent = 0.50;
+let frameCount = 0;
+
+// Helper Rumore Casuale Semplice per Altezze Terreno
+function pseudoNoise(x, y) {
+    let n = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453123;
+    return n - Math.floor(n);
+}
+function getElevation(x, y) {
+    let e = pseudoNoise(Math.floor(x/12), Math.floor(y/12)) * 0.5 +
+            pseudoNoise(Math.floor(x/6), Math.floor(y/6)) * 0.3 +
+            pseudoNoise(Math.floor(x/3), Math.floor(y/3)) * 0.2;
+    // Effetto continente centrale (isole e penisole esterne)
+    let dx = (x - GRID_SIZE/2) / (GRID_SIZE/2);
+    let dy = (y - GRID_SIZE/2) / (GRID_SIZE/2);
+    let dist = Math.sqrt(dx*dx + dy*dy);
+    return e - (dist * 0.55);
+}
+
+// ================= INIZIALIZZAZIONE DELLA MAPPA =================
+function initMap() {
+    for (let x = 0; x < GRID_SIZE; x++) {
+        grid[x] = [];
+        for (let y = 0; y < GRID_SIZE; y++) {
+            let el = getElevation(x, y);
+            let type = 'water', cost = 99999, color = '#1d4ed8'; // Mare profondo
+
+            if (el > 0.45) { type = 'mountain'; cost = 45; color = '#78716c'; } // Montagna alta
+            else if (el > 0.25) { type = 'hills'; cost = 20; color = '#a16207'; } // Colline ostiche
+            else if (el > 0.02) { type = 'plains'; cost = 5; color = '#15803d'; } // Pianure fertili
+            else if (el > 0.0) { type = 'shore'; cost = 8; color = '#22c55e'; } // Coste basse
+
+            grid[x][y] = { type, cost, color, owner: null };
+        }
+    }
+    // Disegna la mappa iniziale completa all'avvio una volta sola
+    for(let x=0; x<GRID_SIZE; x++) {
+        for(let y=0; y<GRID_SIZE; y++) drawCell(x,y);
+    }
+}
+
+function drawCell(x, y) {
+    let cell = grid[x][y];
+    if (cell.owner) {
+        ctx.fillStyle = cell.owner.color;
+        ctx.fillRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+        // Texture per le montagne/colline sopra il colore della nazione
+        if (cell.type === 'mountain') {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+            ctx.fillRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+        } else if (cell.type === 'hills') {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
+            ctx.fillRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+        }
+    } else {
+        ctx.fillStyle = cell.color;
+        ctx.fillRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+    }
+}
+
+// ================= STRUTTURA DELLE NAZIONI E COMBATTIMENTO =================
+class Nation {
+    constructor(id, name, color, isPlayer) {
+        this.id = id;
+        this.name = name;
+        this.color = color;
+        this.isPlayer = isPlayer;
+        this.troops = 150;
+        this.area = 0;
+        this.alive = true;
+        this.capital = {x: 0, y: 0};
+    }
+
+    spawn(x, y) {
+        if (grid[x][y].type === 'water') return false;
+        this.capital = {x, y};
+        
+        // Conquista nucleo iniziale di 3x3 celle
+        for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+                let nx = x + dx, ny = y + dy;
+                if (nx >= 0 && nx < GRID_SIZE && ny >= 0 && ny < GRID_SIZE && grid[nx][ny].type !== 'water') {
+                    grid[nx][ny].owner = this;
+                    this.area++;
+                    drawCell(nx, ny);
+                }
+            }
+        }
+        return true;
+    }
+
+    // LOGICA DI ATTACCO RICHIESTA: abs(TruppeAttacco - TruppeDifesa)
+    launchAttack(targetX, targetY, percentage) {
+        if (!this.alive || this.troops < 10) return;
+
+        let attackingForce = this.troops * percentage;
+        this.troops -= attackingForce; // Le truppe vengono rimosse dalla riserva globale e inviate
+
+        // Trova il punto di partenza più vicino al target tra i propri confini
+        let start = this.getClosestBorderCell(targetX, targetY);
+        if (!start) return;
+
+        // Traccia una linea vettoriale dal confine verso il click (Algoritmo Lineare)
+        let cx = start.x;
+        let cy = start.y;
+        
+        let dx = targetX - cx;
+        let dy = targetY - cy;
+        let steps = Math.max(Math.abs(dx), Math.abs(dy));
+        
+        if (steps === 0) return;
+
+        let xInc = dx / steps;
+        let yInc = dy / steps;
+
+        // Avanzamento dell'attacco cella per cella sul percorso calcolato
+        for (let i = 0; i <= steps; i++) {
+            let tx = Math.floor(cx);
+            let ty = Math.floor(cy);
+
+            if (tx >= 0 && tx < GRID_SIZE && ty >= 0 && ty < GRID_SIZE) {
+                let cell = grid[tx][ty];
+
+                if (cell.type !== 'water' && cell.owner !== this) {
+                    // Calcolo della Forza di Difesa Locale della cella
+                    let cellDefense = cell.cost; 
+                    if (cell.owner) {
+                        // Se c'è un difensore, aggiunge una percentuale proporzionale alle truppe totali dell'impero nemico
+                        cellDefense += (cell.owner.troops / cell.owner.area) * 1.5;
+                    }
+
+                    // Formula richiesta: abs(Attacco - Difesa) per calcolare la risoluzione
+                    let outcome = attackingForce - cellDefense;
+
+                    if (outcome > 0) {
+                        // VITTORIA ATTACCANTE: Conquista la cella
+                        if (cell.owner) {
+                            cell.owner.area--;
+                            cell.owner.troops = Math.max(0, cell.owner.troops - cellDefense * 0.5);
+                        }
+                        cell.owner = this;
+                        this.area++;
+                        drawCell(tx, ty);
+
+                        // La forza rimanente prosegue alla cella successiva
+                        attackingForce = outcome; 
+                    } else {
+                        // SCONFITTA ATTACCANTE: La difesa tiene, l'attacco si ferma qui
+                        if (cell.owner) {
+                            // Il difensore perde comunque truppe a causa del danno ricevuto
+                            cell.owner.troops = Math.max(5, cell.owner.troops - Math.abs(attackingForce) * 0.3);
+                        }
+                        break; 
+                    }
+                }
+            }
+            cx += xInc;
+            cy += yInc;
+        }
+    }
+
+    getClosestBorderCell(tx, ty) {
+        let closest = null;
+        let minDist = Infinity;
+        
+        // Controllo super-veloce distribuito per evitare scansioni pesanti O(N) ad ogni frame
+        for (let i = 0; i < 400; i++) { 
+            let rx = Math.floor(Math.random() * GRID_SIZE);
+            let ry = Math.floor(Math.random() * GRID_SIZE);
+            if (grid[rx][ry].owner === this) {
+                let d = Math.abs(rx - tx) + Math.abs(ry - ty);
+                if (d < minDist) {
+                    minDist = d;
+                    closest = {x: rx, y: ry};
+                }
+            }
+        }
+        return closest;
+    }
+}
+
+// ================= SPAWN DEL PC / BOT =================
+function spawnBots() {
+    const botTemplates = [
+        { name: 'Impero Britannico', color: '#ef4444' },
+        { name: 'Sacro Impero', color: '#eab308' },
+        { name: 'Federazione Est', color: '#a855f7' },
+        { name: 'Califfato Sud', color: '#f97316' },
+        { name: 'Unione Nordica', color: '#06b6d4' }
+    ];
+
+    botTemplates.forEach((template, index) => {
+        let bot = new Nation(index + 2, template.name, template.color, false);
+        let done = false;
+        while (!done) {
+            let rx = Math.floor(Math.random() * GRID_SIZE);
+            let ry = Math.floor(Math.random() * GRID_SIZE);
+            if (grid[rx][ry].type !== 'water' && !grid[rx][ry].owner) {
+                done = bot.spawn(rx, ry);
+            }
+        }
+        NATIONS.push(bot);
+    });
+}
+
+// ================= LOOP DI AGGIORNAMENTO PRINCIPALE =================
+function gameLoop() {
+    if (gameState !== 'PLAYING') return;
+    frameCount++;
+
+    // 1. Generazione Truppe Passiva bilanciata basata sui territori detenuti
+    NATIONS.forEach(n => {
+        if (n.area > 0) {
+            let maxCap = n.area * 35;
+            let growth = (n.area * 0.08) + 0.6;
+            n.troops = Math.min(maxCap, n.troops + growth);
+        } else {
+            n.alive = false;
+        }
+    });
+
+    // 2. IA dei Bot Intelligente ed Efficiente (Attaccano ogni tot frame senza intasare la CPU)
+    if (frameCount % 24 === 0) {
+        NATIONS.forEach(n => {
+            if (!n.isPlayer && n.alive) {
+                // Decide di lanciare un attacco mirato solo se ha accumulato abbastanza truppe
+                if (Math.random() > 0.35) {
+                    let rx = Math.floor(Math.random() * GRID_SIZE);
+                    let ry = Math.floor(Math.random() * GRID_SIZE);
+                    n.launchAttack(rx, ry, 0.40); // I bot attaccano usando il 40% delle loro forze
+                }
+            }
+        });
+    }
+
+    // 3. Aggiorna l'Interfaccia Utente Grafica Laterale
+    if (frameCount % 10 === 0) {
+        updateLeaderboardHTML();
+    }
+
+    requestAnimationFrame(gameLoop);
+}
+
+// ================= GESTIONE INPUT E UI =================
+canvas.addEventListener('mousedown', (e) => {
+    let rect = canvas.getBoundingClientRect();
+    let gx = Math.floor((e.clientX - rect.left) / CELL_SIZE);
+    let gy = Math.floor((e.clientY - rect.top) / CELL_SIZE);
+
+    if (gx < 0 || gx >= GRID_SIZE || gy < 0 || gy >= GRID_SIZE) return;
+
+    if (gameState === 'SPAWN') {
+        let player = new Nation(1, 'Il Tuo Impero', '#3b82f6', true);
+        if (player.spawn(gx, gy)) {
+            NATIONS.push(player);
+            spawnBots();
+            document.getElementById('screen-overlay').style.display = 'none';
+            gameState = 'PLAYING';
+            gameLoop();
+        }
+    } else if (gameState === 'PLAYING') {
+        let player = NATIONS.find(n => n.isPlayer);
+        if (player && player.alive) {
+            // Lancia l'attacco calcolato verso il punto cliccato
+            player.launchAttack(gx, gy, attackPercent);
+        }
+    }
+});
+
+function setAttackPercent(val) {
+    attackPercent = val;
+    document.querySelectorAll('.btn-group button').forEach(b => b.classList.remove('active'));
+    if(val === 0.25) document.getElementById('btn-25').classList.add('active');
+    if(val === 0.50) document.getElementById('btn-50').classList.add('active');
+    if(val === 0.75) document.getElementById('btn-75').classList.add('active');
+}
+
+function updateLeaderboardHTML() {
+    let sorted = [...NATIONS].sort((a, b) => b.area - a.area);
+    let html = '';
+    let pAlive = false;
+    let activeEnemies = 0;
+
+    sorted.forEach(n => {
+        if (n.area > 0) {
+            if (n.isPlayer) pAlive = true;
+            else activeEnemies++;
+
+            html += `
+            <div class="leaderboard-item" style="border-left-color: ${n.color}">
+                <div>
+                    <strong style="color:${n.color}">${n.name}</strong><br>
+                    <span style="font-size:0.8rem; color:var(--text-muted)">Territorio: ${n.area} celle</span>
+                </div>
+                <div style="font-weight: bold; font-size:1.05rem;">${Math.floor(n.troops)} ⚔️</div>
+            </div>`;
+        }
+    });
+
+    document.getElementById('leaderboard').innerHTML = html;
+
+    if (!pAlive) endGame("SCONFITTA", "Il tuo impero è stato conquistato dal nemico.");
+    if (pAlive && activeEnemies === 0) endGame("VITTORIA", "Hai conquistato l'intera terraferma conosciuta!");
+}
+
+function endGame(title, desc) {
+    gameState = 'GAMEOVER';
+    document.getElementById('overlay-title').innerText = title;
+    document.getElementById('overlay-title').style.color = title === "VITTORIA" ? "#10b981" : "#ef4444";
+    document.getElementById('overlay-desc').innerText = desc;
+    document.getElementById('overlay-btn').style.display = 'block';
+    document.getElementById('screen-overlay').style.display = 'block';
+}
+
+// Avvio immediato mappa
+initMap();
+</script>
+
+</body>
+</html>
